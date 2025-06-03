@@ -2,6 +2,9 @@
 # https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0257318#sec001
 import numpy as np
 from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+from math import atan2
+
 
 
 PDB_FILE = '1mjc.pdb'
@@ -9,30 +12,205 @@ PDB_FILE = '1mjc.pdb'
 # get the helices from the file
 # formatting: https://www.wwpdb.org/documentation/file-format-content/format33/sect5.html
 
-helices = []
-with open(PDB_FILE) as f:
-    for line in f:
-        if not line.startswith("HELIX "):
-            continue
-        helices.append({
-            'serNum'      : int(line[7:10].strip()),
-            'helixID'     : line[11:14].strip(),
-            'initResName' : line[15:18].strip(),
-            'initChainID' : line[19].strip(),
-            'initSeqNum'  : int(line[21:25].strip()),
-            'initICode'   : line[25].strip() or None,
-            'endResName'  : line[27:30].strip(),
-            'endChainID'  : line[31].strip(),
-            'endSeqNum'   : int(line[33:37].strip()),
-            'endICode'    : line[37].strip() or None,
-            'helixClass'  : int(line[38:40].strip()),
-            'comment'     : line[40:70].rstrip(),
-            'length'      : int(line[71:76].strip()),
-        })
+def get_helices():
+    helices = []
+    with open(PDB_FILE) as f:
+        for line in f:
+            if not line.startswith("HELIX "):
+                continue
+            helices.append({
+                'serNum'      : int(line[7:10].strip()),
+                'helixID'     : line[11:14].strip(),
+                'initResName' : line[15:18].strip(),
+                'initChainID' : line[19].strip(),
+                'initSeqNum'  : int(line[21:25].strip()),
+                'initICode'   : line[25].strip() or None,
+                'endResName'  : line[27:30].strip(),
+                'endChainID'  : line[31].strip(),
+                'endSeqNum'   : int(line[33:37].strip()),
+                'endICode'    : line[37].strip() or None,
+                'helixClass'  : int(line[38:40].strip()),
+                'comment'     : line[40:70].rstrip(),
+                'length'      : int(line[71:76].strip()),
+            })
+    if not helices:
+        print("No HELIX records found.")
+    return helices
+
+# get the atoms from the file
+# atoms = []
+# with open(PDB_FILE) as f:
+#     for line in f:
+#         if not line.startswith("ATOM  "):
+#             continue
+#         atoms.append({
+#             'serNum'      : int(line[6:11].strip()),
+#             'atomName'    : line[12:16].strip(),
+#             'altLoc'      : line[16].strip(),
+#             'resName'     : line[17:20].strip(),
+#             'chainID'     : line[21].strip(),
+#             'resSeq'      : int(line[22:26].strip()),
+#             'iCode'       : line[26].strip(),
+#             'x'           : float(line[30:38].strip()),
+#             'y'           : float(line[38:46].strip()),
+#             'z'           : float(line[46:54].strip())
+#         })
+
+# get all atom coords from the file that are part of ANY helix
+def get_helices_atoms_coords(helices):
+    coords = []
+    with open(PDB_FILE) as f:
+        for line in f:
+            if not line.startswith("ATOM  "):
+                continue
+            ranges = [(helix['initSeqNum'], helix['endSeqNum']) for helix in helices]
+            resSeq = int(line[22:26].strip())
+            for start, end in ranges:
+                if start <= resSeq <= end:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    coords.append([x, y, z])
+    return np.array(coords)
+
+# https://www.geometrictools.com/Documentation/HelixFitting.pdf
+# 1. use PCA to find the helix's main axis and centroid
+# 2. now that the as the main axis, turn the helix into a standard helix (s.t. make its main axis the z-axis)
+# 3. unwrap phi vs. z, fit φ = ω z + φ0, r = mean radius
+# 4. build fitted helix in rotated frame
+# 5. rotate back to its riginal axis and finally plot it
+
+def fit_plot_helix_with_axis(coords, ax, n_points=200, **line_kwargs):
+    """
+    Parameters
+    ----------
+    coords : np.ndarray, shape (N,3)
+        Observed 3D points of one helix (e.g. Cα atoms).
+    ax : matplotlib 3D Axes
+        Axes on which to draw everything.
+    n_points : int
+        Number of samples along the fitted helix curve.
+    line_kwargs : dict
+        Keyword args for `ax.plot` styling of the fitted helix.
+
+    Returns
+    -------
+    (r, omega, phi0) : tuple of floats
+        The fitted helix parameters:
+          - r    = radius of circular cross‐section
+          - omega = angular frequency per unit z
+          - phi0  = phase offset
+    """
+
+    # first get the centroid of the point cloud so that we can center the weight of it to the z-axis
+    centroid = coords.mean(axis=0)
+    centered = coords - centroid
+
+    # use PCA to get to get the main axis of the helix 
+    pca = PCA(n_components=3)
+    pca.fit(centered)
+    axis = pca.components_[0]
+    axis = axis / np.linalg.norm(axis) # make axis's length 1 (to simplify any trnasformations of it later)
+
+    # plot said main axis, first by finding two endpoints of the axis
+    t_vals = centered.dot(axis) # scalar projections onto axis
+    t_min = t_vals.min()
+    t_max = t_vals.max()
+    # compute endpoints of the axis line in world coords:
+    pt_min = centroid + t_min * axis
+    pt_max = centroid + t_max * axis
+    # draw it
+    ax.plot(
+        [pt_min[0], pt_max[0]],
+        [pt_min[1], pt_max[1]],
+        [pt_min[2], pt_max[2]],
+        color='black', linestyle='--', linewidth=2, label='Helix axis'
+    )
+
+    # get the rotation matrix R that makes the halicoid's axis be parallel to the z-axis
+    z_axis = np.array([0.0, 0.0, 1.0])
+    v = np.cross(axis, z_axis) # v is perpendicular to og axis and z-axis. so, its the axis we need to rotate around
+    c = np.dot(axis, z_axis) #  cosine of the angle between the og axis and z-axis
+    if np.linalg.norm(v) < 1e-8: # if v is (near) zero, axis is already parallel to Z: no rotation needed
+        R = np.eye(3) # thus our rotation matrix can just be the identity matrix
+    else: # toherwise, if indeed the axis needs to be rotated, then the rotation matrix is as follows:
+        K = np.array([ 
+            [    0, -v[2],  v[1]],
+            [ v[2],     0, -v[0]],
+            [-v[1],  v[0],     0]
+        ])
+        R = np.eye(3) + K + (K @ K) * ((1 - c) / (np.linalg.norm(v)**2))
+        # https://en.wikipedia.org/wiki/Rotation_matrix#Conversion_from_rotation_matrix_to_axis%E2%80%93angle
+
+    # rotate all points using this rotation matrix. now we have the points our our "standard helix"
+    rotated = centered @ R.T
+    xs = rotated[:, 0]
+    ys = rotated[:, 1]
+    zs = rotated[:, 2]
+
+    # unwrap phase φ_i = atan2(y_rot, x_rot) vs z_rot
+    raw_phis  = np.array([atan2(y, x) for x, y in zip(xs, ys)])
+    unwrapped = np.unwrap(raw_phis)
+
+    # linear fit φ ≈ ω z + φ0
+    omega, phi0 = np.polyfit(zs, unwrapped, 1)
+
+    # compute r = mean( sqrt(x_rot^2 + y_rot^2) )
+    r = np.mean(np.sqrt(xs**2 + ys**2))
+
+    # build fitted helix in rotated frame
+    z_fit   = np.linspace(zs.min(), zs.max(), n_points)
+    phi_fit = omega * z_fit + phi0
+    x_fit   = r * np.cos(phi_fit)
+    y_fit   = r * np.sin(phi_fit)
+    helix_rotated = np.vstack([x_fit, y_fit, z_fit]).T 
+
+    # rotate the fitted helix back into world frame and re‐center
+    helix_world = (helix_rotated @ np.linalg.inv(R).T) + centroid
+
+    # plot al data points
+    ax.scatter(
+        coords[:, 0], coords[:, 1], coords[:, 2],
+        s=20, alpha=0.6, label='Helix points'
+    )
+
+    # plot fitted helix curve
+    ax.plot(
+        helix_world[:, 0],
+        helix_world[:, 1],
+        helix_world[:, 2],
+        **line_kwargs,
+        label=f'Fitted helix: r={r:.3f}, ω={omega:.3f}, φ={phi0:.3f}'
+    )
+
+    ax.legend()
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title("Helix + Fitted Curve + Main Axis")
+
+    # Return the fitted parameters for external use
+    return r, omega, phi0
 
 
-if not helices:
-    print("No HELIX records found.")
-else:
-    print(helices)
 
+helices = get_helices()
+helix_atoms_coords = get_helices_atoms_coords(helices)
+
+# Plot in 3D
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(helix_atoms_coords[:,0], helix_atoms_coords[:,1], helix_atoms_coords[:,2])
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+
+r_fit, omega_fit, phi0_fit =  fit_plot_helix_with_axis(
+    helix_atoms_coords, ax,
+    n_points=300,
+    color='red', linewidth=2
+)
+
+print(f"Fitted parameters:\n r = {r_fit:.5f}\n ω = {omega_fit:.5f}\n φ0= {phi0_fit:.5f}")
+
+plt.show()
