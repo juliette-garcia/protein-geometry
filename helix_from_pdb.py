@@ -10,9 +10,9 @@ PDB_FILE = '1mjc.pdb'
 
 # get the main helices from the pdb file
 # formatting: https://www.wwpdb.org/documentation/file-format-content/format33/sect5.html
-def get_helices():
+def get_helices(pdb_file):
     helices = []
-    with open(PDB_FILE) as f:
+    with open(pdb_file) as f:
         for line in f:
             if not line.startswith("HELIX "):
                 continue
@@ -36,9 +36,9 @@ def get_helices():
     return helices
 
 # get all atom coords from the file that are part of ANY helix
-def get_helices_atoms_coords(helices):
+def get_helices_atoms_coords(pdb_file, helices):
     coords = []
-    with open(PDB_FILE) as f:
+    with open(pdb_file) as f:
         for line in f:
             if not line.startswith("ATOM  "):
                 continue
@@ -58,14 +58,12 @@ def get_helices_atoms_coords(helices):
 # 3. unwrap phi vs. z, fit φ = ω z + φ0, r = mean radius
 # 4. build fitted helix in rotated frame
 # 5. rotate back to its riginal axis and finally plot it
-def fit_plot_helix(coords, ax, n_points=200, **line_kwargs):
+def fit_helix(coords, n_points = 200):
     """
     Parameters
     ----------
     coords : 3D coordinates of the atoms of one helix
-    ax : matplotlib 3D axes (axes to draw everything on)
     n_points : number of samples along the fitted helix curve (resolution)
-    line_kwargs : dict of keyword args for final `ax.plot` styling
 
     Returns
     -------
@@ -73,6 +71,7 @@ def fit_plot_helix(coords, ax, n_points=200, **line_kwargs):
         - r = radius of circular cross‐section
         - omega = angular frequency per unit z
         - phi0 = phase offset
+    helix_world : set of 3D coordinates of fitted helix (in the original PDB coordinate frame)
     """
 
     # first get the centroid of the point cloud so that we can center the weight of it to the z-axis
@@ -84,21 +83,6 @@ def fit_plot_helix(coords, ax, n_points=200, **line_kwargs):
     pca.fit(centered)
     axis = pca.components_[0]
     axis = axis / np.linalg.norm(axis) # make axis's length 1 (to simplify any trnasformations of it later)
-
-    # plot said main axis, first by finding two endpoints of the axis
-    t_vals = centered.dot(axis) # scalar projections onto axis
-    t_min = t_vals.min()
-    t_max = t_vals.max()
-    # compute endpoints of the axis line in world coords:
-    pt_min = centroid + t_min * axis
-    pt_max = centroid + t_max * axis
-    # draw it
-    ax.plot(
-        [pt_min[0], pt_max[0]],
-        [pt_min[1], pt_max[1]],
-        [pt_min[2], pt_max[2]],
-        color='black', linestyle='--', linewidth=2, label='Helix axis'
-    )
 
     # get the rotation matrix R that makes the halicoid's axis be parallel to the z-axis
     z_axis = np.array([0.0, 0.0, 1.0])
@@ -147,42 +131,6 @@ def fit_plot_helix(coords, ax, n_points=200, **line_kwargs):
     # rotate the fitted helix back into world frame and re‐center
     helix_world = (helix_rotated @ np.linalg.inv(R).T) + centroid
 
-    # plot al data points
-    ax.scatter(
-        coords[:, 0], coords[:, 1], coords[:, 2],
-        s=20, alpha=0.6, label='Helix points'
-    )
-
-    # plot fitted helix curve
-    ax.plot(
-        helix_world[:, 0],
-        helix_world[:, 1],
-        helix_world[:, 2],
-        **line_kwargs,
-        label=f'Fitted helix: r={r:.3f}, ω={omega:.3f}, φ={phi0:.3f}'
-    )
-    ax.legend()
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_title("Helix + Fitted Curve + Main Axis")
-
     # return fitted param
-    return r, omega, phi0
+    return r, omega, phi0, helix_world
 
-
-helices = get_helices()
-helix_atoms_coords = get_helices_atoms_coords(helices)
-r_fit, omega_fit, phi0_fit =  fit_plot_helix(helix_atoms_coords, ax, n_points=300, color='red', linewidth=2)
-
-# Plot atoms in 3D
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-ax.scatter(helix_atoms_coords[:,0], helix_atoms_coords[:,1], helix_atoms_coords[:,2])
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
-
-print(f"Fitted parameters:\n r = {r_fit:.5f}\n ω = {omega_fit:.5f}\n φ0= {phi0_fit:.5f}")
-
-plt.show()
