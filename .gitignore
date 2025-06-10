@@ -1,5 +1,5 @@
 /helix-venv/
+/__pycache__/
 /*.pdb
-*.gitignore
 *.pdb
 *.html
