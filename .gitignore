@@ -1,2 +1,4 @@
 /helix-venv/
 /*.pdb
+*.gitignore
+*.pdb
