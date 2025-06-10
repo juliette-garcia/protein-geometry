@@ -4,19 +4,17 @@ import numpy as np
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from math import atan2
+from collections import defaultdict
 
-PDB_FILE = '1mjc.pdb'
-
-
-# get the main helices from the pdb file
+# get all the atoms belonging to any helix from the pdb file
 # formatting: https://www.wwpdb.org/documentation/file-format-content/format33/sect5.html
-def get_helices(pdb_file):
-    helices = []
+def get_helix_atoms(pdb_file):
+    helix_atoms = []
     with open(pdb_file) as f:
         for line in f:
             if not line.startswith("HELIX "):
                 continue
-            helices.append({
+            helix_atoms.append({
                 'serNum'      : int(line[7:10].strip()),
                 'helixID'     : line[11:14].strip(),
                 'initResName' : line[15:18].strip(),
@@ -31,18 +29,18 @@ def get_helices(pdb_file):
                 'comment'     : line[40:70].rstrip(),
                 'length'      : int(line[71:76].strip()),
             })
-    if not helices:
+    if not helix_atoms:
         print("No HELIX records found.")
-    return helices
+    return helix_atoms
 
 # get all atom coords from the file that are part of ANY helix
-def get_helices_atoms_coords(pdb_file, helices):
+def get_helix_atoms_coords(pdb_file, helix_atoms):
     coords = []
     with open(pdb_file) as f:
         for line in f:
             if not line.startswith("ATOM  "):
                 continue
-            ranges = [(helix['initSeqNum'], helix['endSeqNum']) for helix in helices]
+            ranges = [(helix_atom['initSeqNum'], helix_atom['endSeqNum']) for helix_atom in helix_atoms]
             resSeq = int(line[22:26].strip())
             for start, end in ranges:
                 if start <= resSeq <= end:
@@ -57,26 +55,28 @@ def get_helices_atoms_coords(pdb_file, helices):
 # 2. now that the as the main axis, turn the helix into a standard helix (s.t. make its main axis the z-axis)
 # 3. unwrap phi vs. z, fit φ = ω z + φ0, r = mean radius
 # 4. build fitted helix in rotated frame
-# 5. rotate back to its riginal axis and finally plot it
-def fit_helix(coords, n_points = 200):
+# 5. rotate back to its original axis
+# 6. return helix params and the helix itself (in 3D points)
+def get_helix_model(helix_atoms_coords, n_points = 200, return_params = False):
     """
     Parameters
     ----------
     coords : 3D coordinates of the atoms of one helix
     n_points : number of samples along the fitted helix curve (resolution)
+    return_params : whether to return the parameters of the helix
 
     Returns
     -------
-    (r, omega, phi0) : tuple of floats that are the fitted helix's parameters
-        - r = radius of circular cross‐section
-        - omega = angular frequency per unit z
-        - phi0 = phase offset
-    helix_world : set of 3D coordinates of fitted helix (in the original PDB coordinate frame)
+    (r, omega, phi0, helix_world) : tuple of floats that are the fitted helix's parameters
+        - r = radius of circular cross‐section (only returned if return_params = True)
+        - omega = angular frequency per unit z (only returned if return_params = True)
+        - phi0 = phase offset (only returned if return_params = True)
+        - helix_world = set of 3D coordinates of fitted helix in the original PDB coordinate frame
     """
 
     # first get the centroid of the point cloud so that we can center the weight of it to the z-axis
-    centroid = coords.mean(axis=0)
-    centered = coords - centroid
+    centroid = helix_atoms_coords.mean(axis=0)
+    centered = helix_atoms_coords - centroid
 
     # use PCA to get to get the main axis of the helix 
     pca = PCA(n_components=3)
@@ -132,5 +132,44 @@ def fit_helix(coords, n_points = 200):
     helix_world = (helix_rotated @ np.linalg.inv(R).T) + centroid
 
     # return fitted param
-    return r, omega, phi0, helix_world
+    if return_params:
+        return r, omega, phi0, helix_world
+    else:
+        return helix_world
 
+
+def helices_from_pdb(pdb_file_name, return_params):
+    """
+    Parameters
+    ----------
+    pdb_file_name : name of PDB file you want to extract the helix from
+    return_params : whether to return the parameters of each helix
+
+    Returns
+    -------
+    [(r, omega, phi0, helix_worlds)] : a list of tuples of floats that are the fitted helix's parameters for each helix
+        - r = radius of circular cross‐section (only returned if return_params = True)
+        - omega = angular frequency per unit z (only returned if return_params = True)
+        - phi0 = phase offset (only returned if return_params = True)
+        - helix_worlds = list of sets of 3D coordinates of fitted helix in the original PDB coordinate frame
+    """
+
+    # get all the atoms that belong to any helix in the pdb file
+    all_helix_atoms = get_helix_atoms(pdb_file_name)
+
+    # split into a list of atom dicts (by helix id)
+    grouped_helix_atoms = defaultdict(list)
+    for atom_dict in all_helix_atoms:
+        grouped_helix_atoms[atom_dict['helixID']].append(atom_dict)
+
+    # get helix and params for each group of helix atoms
+    output = []
+    for grouped_atoms in grouped_helix_atoms.values():
+        atoms_coords = get_helix_atoms_coords(pdb_file_name, grouped_atoms)
+        if return_params:
+            r, omega, phi0, helix_world = get_helix_model(atoms_coords, return_params = True)
+            output.append((r, omega, phi0, helix_world))
+        else:
+            helix_world = get_helix_model(atoms_coords)
+            output.append(helix_world)
+    return output
