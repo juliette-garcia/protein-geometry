@@ -5,13 +5,11 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from math import atan2
 
-
-
 PDB_FILE = '1mjc.pdb'
 
-# get the helices from the file
-# formatting: https://www.wwpdb.org/documentation/file-format-content/format33/sect5.html
 
+# get the main helices from the pdb file
+# formatting: https://www.wwpdb.org/documentation/file-format-content/format33/sect5.html
 def get_helices():
     helices = []
     with open(PDB_FILE) as f:
@@ -37,25 +35,6 @@ def get_helices():
         print("No HELIX records found.")
     return helices
 
-# get the atoms from the file
-# atoms = []
-# with open(PDB_FILE) as f:
-#     for line in f:
-#         if not line.startswith("ATOM  "):
-#             continue
-#         atoms.append({
-#             'serNum'      : int(line[6:11].strip()),
-#             'atomName'    : line[12:16].strip(),
-#             'altLoc'      : line[16].strip(),
-#             'resName'     : line[17:20].strip(),
-#             'chainID'     : line[21].strip(),
-#             'resSeq'      : int(line[22:26].strip()),
-#             'iCode'       : line[26].strip(),
-#             'x'           : float(line[30:38].strip()),
-#             'y'           : float(line[38:46].strip()),
-#             'z'           : float(line[46:54].strip())
-#         })
-
 # get all atom coords from the file that are part of ANY helix
 def get_helices_atoms_coords(helices):
     coords = []
@@ -79,27 +58,21 @@ def get_helices_atoms_coords(helices):
 # 3. unwrap phi vs. z, fit φ = ω z + φ0, r = mean radius
 # 4. build fitted helix in rotated frame
 # 5. rotate back to its riginal axis and finally plot it
-
-def fit_plot_helix_with_axis(coords, ax, n_points=200, **line_kwargs):
+def fit_plot_helix(coords, ax, n_points=200, **line_kwargs):
     """
     Parameters
     ----------
-    coords : np.ndarray, shape (N,3)
-        Observed 3D points of one helix (e.g. Cα atoms).
-    ax : matplotlib 3D Axes
-        Axes on which to draw everything.
-    n_points : int
-        Number of samples along the fitted helix curve.
-    line_kwargs : dict
-        Keyword args for `ax.plot` styling of the fitted helix.
+    coords : 3D coordinates of the atoms of one helix
+    ax : matplotlib 3D axes (axes to draw everything on)
+    n_points : number of samples along the fitted helix curve (resolution)
+    line_kwargs : dict of keyword args for final `ax.plot` styling
 
     Returns
     -------
-    (r, omega, phi0) : tuple of floats
-        The fitted helix parameters:
-          - r    = radius of circular cross‐section
-          - omega = angular frequency per unit z
-          - phi0  = phase offset
+    (r, omega, phi0) : tuple of floats that are the fitted helix's parameters
+        - r = radius of circular cross‐section
+        - omega = angular frequency per unit z
+        - phi0 = phase offset
     """
 
     # first get the centroid of the point cloud so that we can center the weight of it to the z-axis
@@ -150,19 +123,25 @@ def fit_plot_helix_with_axis(coords, ax, n_points=200, **line_kwargs):
 
     # unwrap phase φ_i = atan2(y_rot, x_rot) vs z_rot
     raw_phis  = np.array([atan2(y, x) for x, y in zip(xs, ys)])
+    # For each point (x_i, y_i ), atan2(y_i, x_i) returns an 
+    # angle ϕ_i ​ in the range (−π,+π]. i.e. geometrically, it’s the polar angle of 
+    # the point in the xy-plane (measured from the positive x-axis)
     unwrapped = np.unwrap(raw_phis)
+    # scans through the raw_phis sequence and whenever it sees a jump of more
+    # than π in magnitude between consecutive entries, it adds or subtracts 2π 
+    # to that and all next entries to make the sequence change smoothly
 
-    # linear fit φ ≈ ω z + φ0
+    # linear fit φ ≈ ω z + φ_0 (above the partial derivative on page 3 of the paper)
     omega, phi0 = np.polyfit(zs, unwrapped, 1)
 
-    # compute r = mean( sqrt(x_rot^2 + y_rot^2) )
+    # compute the radius of the helix (the average radial distance of each point from the Z–axis)
     r = np.mean(np.sqrt(xs**2 + ys**2))
 
     # build fitted helix in rotated frame
-    z_fit   = np.linspace(zs.min(), zs.max(), n_points)
-    phi_fit = omega * z_fit + phi0
-    x_fit   = r * np.cos(phi_fit)
-    y_fit   = r * np.sin(phi_fit)
+    z_fit = np.linspace(zs.min(), zs.max(), n_points)
+    phi_fit = omega * z_fit + phi0 # from the equation φ ≈ ω z + φ_0
+    x_fit = r * np.cos(phi_fit)
+    y_fit = r * np.sin(phi_fit)
     helix_rotated = np.vstack([x_fit, y_fit, z_fit]).T 
 
     # rotate the fitted helix back into world frame and re‐center
@@ -182,34 +161,27 @@ def fit_plot_helix_with_axis(coords, ax, n_points=200, **line_kwargs):
         **line_kwargs,
         label=f'Fitted helix: r={r:.3f}, ω={omega:.3f}, φ={phi0:.3f}'
     )
-
     ax.legend()
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
     ax.set_title("Helix + Fitted Curve + Main Axis")
 
-    # Return the fitted parameters for external use
+    # return fitted param
     return r, omega, phi0
-
 
 
 helices = get_helices()
 helix_atoms_coords = get_helices_atoms_coords(helices)
+r_fit, omega_fit, phi0_fit =  fit_plot_helix(helix_atoms_coords, ax, n_points=300, color='red', linewidth=2)
 
-# Plot in 3D
+# Plot atoms in 3D
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
 ax.scatter(helix_atoms_coords[:,0], helix_atoms_coords[:,1], helix_atoms_coords[:,2])
 ax.set_xlabel('X')
 ax.set_ylabel('Y')
 ax.set_zlabel('Z')
-
-r_fit, omega_fit, phi0_fit =  fit_plot_helix_with_axis(
-    helix_atoms_coords, ax,
-    n_points=300,
-    color='red', linewidth=2
-)
 
 print(f"Fitted parameters:\n r = {r_fit:.5f}\n ω = {omega_fit:.5f}\n φ0= {phi0_fit:.5f}")
 
