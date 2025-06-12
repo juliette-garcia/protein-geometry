@@ -5,6 +5,32 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from math import atan2
 from collections import defaultdict
+import os
+import requests
+
+# fetch PDB File
+def fetch_pdb(pdb_id):
+    """Download PDB file from RCSB database"""
+    url = f"https://files.rcsb.org/download/{pdb_id.lower()}.pdb"
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise ValueError(f"PDB ID {pdb_id} not found")
+    
+    filename = f"{pdb_id.lower()}.pdb"
+    with open(filename, 'w') as f:
+        f.write(response.text)
+    return filename
+
+def calculate_helical_properties(r, omega):
+    # Pitch parameter c from MathWorld: https://mathworld.wolfram.com/Helix.html 
+    c = 2 * np.pi / abs(omega)
+    # Actual pitch (distance per full turn)
+    pitch = 2 * np.pi / abs(omega)
+    # Curvature (κ)
+    curvature = r / (r**2 + (1/omega)**2)
+    # Torsion (τ)
+    torsion = (1/omega) / (r**2 + (1/omega)**2)
+    return c, pitch, curvature, torsion
 
 # get all the atoms belonging to any helix from the pdb file
 # formatting: https://www.wwpdb.org/documentation/file-format-content/format33/sect5.html
@@ -153,6 +179,10 @@ def helices_from_pdb(pdb_file_name, return_params):
         - phi0 = phase offset (only returned if return_params = True)
         - helix_worlds = list of sets of 3D coordinates of fitted helix in the original PDB coordinate frame
     """
+    # if the pdb file is not given, try to fetch it from the RCSB database
+    if not os.path.exists(pdb_file_name):
+        pdb_id = os.path.splitext(os.path.basename(pdb_file_name))[0]
+        pdb_file_name = fetch_pdb(pdb_id)
 
     # get all the atoms that belong to any helix in the pdb file
     all_helix_atoms = get_helix_atoms(pdb_file_name)
@@ -169,6 +199,8 @@ def helices_from_pdb(pdb_file_name, return_params):
         if return_params:
             r, omega, phi0, helix_world = get_helix_model(atoms_coords, return_params = True)
             output.append((r, omega, phi0, helix_world))
+            c, pitch, curvature, torsion = calculate_helical_properties(r, omega)
+            print(f"Helical properties: \n c = {c:.5f} Å\n pitch = {pitch:.5f} Å\n curvature = {curvature:.5f} Å⁻¹\n torsion = {torsion:.5f} Å⁻¹")
         else:
             helix_world = get_helix_model(atoms_coords)
             output.append(helix_world)

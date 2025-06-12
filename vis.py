@@ -3,7 +3,7 @@ import time
 from helix_from_pdb import helices_from_pdb
 
 
-pdb_file_name = "1fft.pdb"
+pdb_file_name = "1al1.pdb"
 
 # Returns a list of helix_worlds, each a list of (x, y, z) coordinates
 helix_worlds = helices_from_pdb(pdb_file_name, return_params=False)
